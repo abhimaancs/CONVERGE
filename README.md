@@ -1,15 +1,84 @@
 # Converge — Autonomous Code-Fixing Agent
 
-Given a repo and an issue (or failing test), Converge reads the codebase,
-writes a fix, runs the test suite in a sandboxed Docker container, and
-iterates until tests pass — then opens a PR automatically. Available as a
-CLI and as a web UI with a live streaming trace.
+You give it a GitHub repo and an issue (or failing test). It reads the
+codebase, writes a fix, runs the test suite in a sandboxed Docker container,
+retries until tests pass, and opens a pull request automatically — no human
+in the loop until review time.
 
-**See [ENGINEERING_JOURNAL.md](./ENGINEERING_JOURNAL.md) for the real build
-story** — architecture decisions and every bug hit along the way (Windows
-path bugs, free-tier model rotation, rate limits, stream lifecycle issues),
-with root causes and fixes. That's the more interesting read if you want
-the "why," not just the "how to run it."
+This isn't a "call an LLM, show the answer" wrapper. It's a closed
+**plan → act → observe → retry** loop: the agent reads code, proposes a fix,
+executes it in an isolated sandbox, checks its own work against the real
+test suite, and iterates on failure — the same pattern behind Cursor's
+agent mode, Devin, and Claude Code.
+
+**[See ENGINEERING_JOURNAL.md for the real build story →](./ENGINEERING_JOURNAL.md)**
+Every bug hit along the way — Windows path bugs, a free-tier model
+double-escaping newlines in tool calls, provider rate limits, a stream
+lifecycle crash — with root cause and fix for each. That's the more
+interesting read if you want the "why," not just "how to run it."
+
+## What a real run looks like
+
+Abridged trace from an actual successful run against a live GitHub repo
+(full pipeline: clone → diagnose → fix → verify → branch → push → PR):
+
+```
+[TOOL CALL: run_tests]
+{"passed":false,"output":"...AssertionError: assert 3 == 3.5..."}
+
+[TOOL CALL: read_file] {"path":"calculator.py"}
+[TOOL CALL: write_file] {"path":"calculator.py", "content":"...return a / b..."}
+
+[TOOL CALL: run_tests]
+{"passed":true,"output":"3 passed in 0.23s"}
+
+[SUCCESS] Tests passed on attempt 5.
+[PR] https://github.com/abhimaancs/converge-test-repo/pull/1
+```
+
+## Architecture
+
+```
+ Web UI (Next.js)  ──┐
+                      ├──▶  agent-core.js  ──▶  Docker sandbox (run_tests)
+ CLI (Node.js)     ──┘         │                  network-isolated,
+                                │                  resource-capped,
+                                ▼                  30s timeout
+                         GitHub API
+                    (clone / branch / PR)
+```
+
+One agent loop (`agent-core.js`), two front ends. The CLI prints its events
+to stdout; the web UI streams the same events to a browser over
+Server-Sent Events. Neither duplicates the actual logic — retry handling,
+tool dispatch, provider selection all live in one place.
+
+## Engineering highlights
+
+- **Sandboxed execution, not just prompting.** File reads/writes happen on
+  the host (trusted — it's just text); only *running* code goes through a
+  Docker container with `--network none`, memory/CPU/pid caps, and a hard
+  timeout — because that's the actual point where an LLM-authored "fix"
+  could do real damage.
+- **Provider-agnostic via the OpenAI-compatible API shape.** Works against
+  Anthropic (via OpenRouter), OpenRouter's free-model router, or Gemini's
+  OpenAI-compatible endpoint — a `baseURL`/`apiKey` swap, not a rewrite.
+- **Retry logic that distinguishes failure types.** Rate limits (429) get
+  patient backoff (~65s, since per-minute quotas reset on that cadence);
+  connection drops get short exponential backoff; genuine errors (bad auth,
+  malformed request) are not retried, since waiting won't fix those.
+- **Defensive tool-call validation.** `write_file` rejects content that
+  looks double-escaped (literal `\n` text instead of real newlines) — a
+  real failure mode observed with a free-tier model — before it can corrupt
+  a file and surface as a confusing downstream syntax error.
+
+## Tech stack
+
+Node.js, Next.js (App Router, Server-Sent Events), Docker, GitHub REST API
+(via Octokit), LLM tool-calling (OpenAI-compatible function-calling schema)
+against Claude / OpenRouter / Gemini.
+
+---
 
 ## What's here
 
@@ -42,13 +111,22 @@ web/                  Next.js UI — same agent-core.js, streamed to a browser
    cd orchestrator
    npm install
    ```
-4. Set your OpenRouter API key:
+4. Set an API key for one of the two supported providers:
+
+   **Gemini** (has a genuine free tier, no card required):
+   ```
+   export GEMINI_API_KEY=your-gemini-key
+   ```
+   Model defaults to `gemini-flash-latest` (an alias Google keeps pointed
+   at their current stable Flash model). Override with `GEMINI_MODEL` if needed.
+
+   **OpenRouter** (only used if `GEMINI_API_KEY` isn't set):
    ```
    export OPENROUTER_API_KEY=sk-or-...
    ```
-   Optionally override the model (default is `anthropic/claude-sonnet-4.5`) —
-   check openrouter.ai/models for current tool-calling-capable model slugs
-   and pricing:
+   Defaults to `openrouter/free` (an auto-router that picks a currently
+   available free tool-calling model). For Claude specifically, once you've
+   added credits:
    ```
    export OPENROUTER_MODEL=anthropic/claude-sonnet-4.5
    ```
@@ -102,9 +180,9 @@ what it tried.
 against — don't hand it a token with broader access than that.
 
 Either way, you'll see printed live to the terminal:
-- Claude calling `list_files` / `read_file` to look around
-- Claude calling `write_file` with its proposed fix
-- Claude calling `run_tests` — which spins up a fresh, network-isolated,
+- The model calling `list_files` / `read_file` to look around
+- The model calling `write_file` with its proposed fix
+- The model calling `run_tests` — which spins up a fresh, network-isolated,
   resource-capped container, runs pytest inside it, and returns the result
 - If it fails, the error output gets fed back and it tries again (capped at 10 attempts)
 - On success: which attempt it took (and, for `run-full.js`, the PR URL)
