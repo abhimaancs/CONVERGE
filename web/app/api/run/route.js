@@ -30,6 +30,10 @@ export async function POST(request) {
   }
 
   const encoder = new TextEncoder();
+  // Stream cancellation is reported through the underlying source's cancel()
+  // hook, which runs outside start(). Keep this flag in the shared scope so
+  // a disconnected client cannot trigger a later branch push or pull request.
+  let aborted = false;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -42,7 +46,6 @@ export async function POST(request) {
       // already closed" and crashes the whole request — this flag, plus
       // guarding every write, prevents that.
       let closed = false;
-      let aborted = false;
 
       const send = (event) => {
         if (closed) return;
@@ -76,6 +79,7 @@ export async function POST(request) {
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "converge-web-"));
         send({ label: "CLONE", detail: `Cloning ${repoSlug} into a temp workspace` });
         const { owner, repo } = await cloneRepo(repoSlug, tmpDir);
+        if (aborted) return;
 
         send({ label: "AGENT", detail: "Handing off to the agent loop..." });
         const result = await runAgent({
@@ -105,6 +109,7 @@ export async function POST(request) {
         await commitAndPush(tmpDir, branchName, `Fix: ${issue.slice(0, 72)}`);
 
         const baseBranch = await getDefaultBranch(owner, repo);
+        if (aborted) return;
         send({ label: "PR", detail: `Opening PR against ${baseBranch}...` });
         const pr = await openPullRequest({
           owner,
@@ -132,9 +137,7 @@ export async function POST(request) {
     // least lets the rest of the handler know not to bother sending more
     // events to a socket nobody's listening on.
     cancel() {
-      // No-op beyond what the `closed`/`aborted` flags above already
-      // handle via failed send() calls — kept here so the stream has an
-      // explicit cancel handler instead of relying on enqueue() throwing.
+      aborted = true;
     },
   });
 
