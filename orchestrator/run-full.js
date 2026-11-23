@@ -38,7 +38,7 @@ async function main() {
   await createBranch(tmpDir, branchName);
 
   logTrace("COMMIT+PUSH", "Committing agent's changes and pushing...");
-  await commitAndPush(tmpDir, branchName, `Fix: ${issue.slice(0, 72)}`);
+  await commitAndPush(tmpDir, branchName, `Fix: ${issue.slice(0, 72)}`, { owner, repo });
 
   const baseBranch = await getDefaultBranch(owner, repo);
   logTrace("PR", `Opening PR against ${baseBranch}...`);

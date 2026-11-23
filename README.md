@@ -204,13 +204,30 @@ npm install
 Set env vars in the same terminal you'll run `npm run dev` from:
 ```
 set GEMINI_API_KEY=your-gemini-key
-set GITHUB_TOKEN=ghp_...          # used by the CLI PR workflow; not by web runs
+set GITHUB_TOKEN=ghp_...          # optional; used by the CLI PR workflow only
 set SESSION_SECRET=any-long-random-string
+set GITHUB_APP_CLIENT_ID=your-github-app-client-id
+set GITHUB_APP_CLIENT_SECRET=your-github-app-client-secret
+set GITHUB_APP_CALLBACK_URL=http://localhost:3000/api/github/callback
 ```
 `SESSION_SECRET` is what signs session cookies — pick any long random string
 (it doesn't need to be memorable, just not guessable). Without it the server
 throws on the first login/signup attempt, on purpose, rather than silently
-issuing forgeable sessions.
+issuing forgeable sessions. It also encrypts GitHub user tokens in the local
+user store, so changing it requires users to reconnect their GitHub accounts.
+
+To enable per-user repository access, create a **GitHub App** and set its
+callback URL to the value above (use your deployed HTTPS URL in production).
+Give it only **Contents: read and write** and **Pull requests: read and
+write** repository permissions, enable expiring user access tokens, and
+install it only on repositories users want Converge to access. Copy its
+client ID and client secret into the server environment; never expose the
+secret in browser code or commit it. Converge
+uses GitHub App user access tokens, refreshes expiring tokens, encrypts them
+at rest, and revokes them when a user disconnects. GitHub recommends GitHub
+Apps for fine-grained access; its user tokens are limited by both the app's
+permissions and each user's access. See [GitHub App authorization](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app)
+and [GitHub App security practices](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/best-practices-for-creating-a-github-app).
 
 Then:
 ```
@@ -227,9 +244,11 @@ At `/app`, enter a public repo (`owner/repo`) and an issue description, then
 hit Run — you'll see the same live trace as the CLI (`[PROVIDER]`,
 `[ATTEMPT 1/10]`, `[TOOL CALL: ...]`, etc.) streamed into the browser. Web
 runs do not use the deployment's GitHub token to clone repositories.
-Pull-request creation is temporarily disabled in the web app until each
-account can connect and authorize its own GitHub identity. The CLI's
-`run-full.js` workflow can still open PRs using `GITHUB_TOKEN`.
+Users can connect their GitHub account from the dashboard. Connected users
+can access repositories selected when installing the GitHub App, and may ask
+Converge to open a pull request when they have write access. Web runs never
+use the deployment's `GITHUB_TOKEN`; the CLI's `run-full.js` continues to use
+that optional token.
 
 Note: `web/` isn't a standalone app — its API route imports directly from
 `../orchestrator/agent-core.js`, `tools.js`, `docker-sandbox.js`, and
@@ -240,12 +259,12 @@ two front ends.
 
 ## Why the sandbox is a real container and not just a subprocess
 
-The repo folder is the only thing bind-mounted in, and it's the only writable
-path. The container has `--network none` (nothing it runs can reach the
-internet or your LAN), memory/CPU/pid caps (a bad fix that forks or infinite-loops
-can't take down your machine), and gets killed outright after 30s. Read/write
-of files happens on the host directly — only *executing* untrusted code goes
-through the sandbox, since that's the actual risk surface.
+The checkout is bind-mounted for test runs, while `.git` is mounted read-only
+so untrusted test code cannot rewrite remotes or Git hooks before a host-side
+push. The container has `--network none` (nothing it runs can reach the
+internet or your LAN), a read-only root filesystem, resource caps, and a hard
+timeout. Agent file edits happen on the host; only *executing* repository code
+goes through the sandbox.
 
 ## Known rough edges (expected at this stage)
 
@@ -254,8 +273,8 @@ through the sandbox, since that's the actual risk surface.
   fine for small fixes but will get expensive on large files
 - No file-search/embedding — the agent relies on `list_files` + `read_file`,
   which won't scale to large repos before hitting context limits
-- The CLI can open PRs with `GITHUB_TOKEN`; the web app keeps this disabled
-  until GitHub authorization is linked to each account
+- Web GitHub authorization needs a configured GitHub App and each user must
+  install/authorize it for the repositories they want to use
 - The CLI's `run-full.js` temp clone is left on disk so you can inspect it;
   web run directories are removed automatically after each run
 - The web UI's auth is real (bcrypt, HMAC-signed sessions, `/api/run`
@@ -273,5 +292,5 @@ through the sandbox, since that's the actual risk surface.
 1. Test against more real repos with actual GitHub issues, not just planted bugs
 2. Add basic file-search (embeddings or even just grep-based relevance
    ranking) so it scales past tiny repos
-3. Add auth + per-user isolation to the web UI if you ever want to share it
-   beyond your own machine
+3. Replace the local JSON user store and per-process run limits with a shared
+   database and job queue before running multiple web instances

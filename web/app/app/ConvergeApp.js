@@ -52,8 +52,11 @@ function SVG({ d }) {
 }
 
 /* ── Main component ── */
-export default function ConvergeApp({ username }) {
+export default function ConvergeApp({ username, githubConnection, githubConfigured, githubNotice }) {
   const router = useRouter();
+  const [githubAccount, setGithubAccount] = useState(githubConnection);
+  const [githubMessage, setGithubMessage] = useState("");
+  const [disconnectingGithub, setDisconnectingGithub] = useState(false);
   const [repoSlug, setRepoSlug]   = useState("");
   const [issue, setIssue]         = useState("");
   const [openPr, setOpenPr]       = useState(false);
@@ -67,6 +70,26 @@ export default function ConvergeApp({ username }) {
     await fetch("/api/auth/logout", { method: "POST" });
     router.push("/");
     router.refresh();
+  }
+
+  async function handleGithubDisconnect() {
+    setDisconnectingGithub(true);
+    setGithubMessage("");
+    try {
+      const response = await fetch("/api/github/disconnect", { method: "POST" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Could not disconnect GitHub.");
+      setGithubAccount(null);
+      setOpenPr(false);
+      setGithubMessage(body.tokenRevoked
+        ? "GitHub was disconnected and its token was revoked."
+        : "GitHub was disconnected here, but token revocation could not be confirmed. Revoke Converge in GitHub settings.");
+      router.refresh();
+    } catch (error) {
+      setGithubMessage(error.message);
+    } finally {
+      setDisconnectingGithub(false);
+    }
   }
 
   async function handleRun(e) {
@@ -261,23 +284,27 @@ export default function ConvergeApp({ username }) {
                 <label
                   className={`toggle-card${openPr ? " active" : ""}`}
                   htmlFor="open-pr-toggle"
-                  style={{ cursor: running ? "not-allowed" : "pointer" }}
+                  style={{ cursor: running || !githubAccount ? "not-allowed" : "pointer" }}
                 >
                   <input
                     type="checkbox"
                     id="open-pr-toggle"
                     checked={openPr}
                     onChange={(e) => setOpenPr(e.target.checked)}
-                    disabled
+                    disabled={running || !githubAccount}
                   />
                   <div>
                     <div style={{
                       fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 3,
                     }}>
-                      Open a pull request on success (temporarily unavailable)
+                      Open a pull request on success
                     </div>
                     <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.55 }}>
-                      Pull requests will be available after each user connects their own GitHub account.
+                      {githubAccount
+                        ? `Use your GitHub access to create a branch and pull request as @${githubAccount.login}.`
+                        : githubConfigured
+                          ? "Connect your GitHub account to access private repositories and open pull requests."
+                          : "GitHub authorization needs to be configured by the server owner."}
                     </div>
                   </div>
                 </label>
@@ -301,6 +328,49 @@ export default function ConvergeApp({ username }) {
                   )}
                 </button>
               </form>
+            </div>
+
+            {/* GitHub connection */}
+            <div className="card" style={{ padding: "17px 20px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                <div>
+                  <p className="section-eyebrow">GitHub access</p>
+                  <h2 style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", margin: "0 0 4px" }}>
+                    {githubAccount ? `Connected as @${githubAccount.login}` : "Connect your account"}
+                  </h2>
+                  <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: 0, lineHeight: 1.5 }}>
+                    {githubAccount
+                      ? "Converge uses your GitHub App permissions for this account."
+                      : githubConfigured
+                        ? "Authorize Converge to read your selected repositories and open pull requests."
+                        : "The server owner must configure a GitHub App before you can connect."}
+                  </p>
+                </div>
+                {githubAccount ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={handleGithubDisconnect}
+                    disabled={running || disconnectingGithub}
+                  >
+                    {disconnectingGithub ? "Disconnecting…" : "Disconnect"}
+                  </button>
+                ) : githubConfigured ? (
+                  <a className="btn btn-secondary btn-sm" href="/api/github/connect">Connect GitHub</a>
+                ) : (
+                  <button type="button" className="btn btn-secondary btn-sm" disabled>Connect GitHub</button>
+                )}
+              </div>
+              {(githubMessage || githubNotice) && (
+                <p role="status" className="hint" style={{ marginTop: 10, marginBottom: 0 }}>
+                  {githubMessage || ({
+                    connected: "GitHub account connected.",
+                    denied: "GitHub authorization was canceled.",
+                    failed: "GitHub could not be connected. Please try again.",
+                    "setup-required": "The server owner needs to finish GitHub App configuration.",
+                  }[githubNotice] || "")}
+                </p>
+              )}
             </div>
 
             {/* Run stats card — only shown after at least one run */}

@@ -3,7 +3,32 @@ import { Octokit } from "@octokit/rest";
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
-function run(cmd, args, cwd, { env = process.env, displayArgs = args } = {}) {
+function gitAuthEnv(token) {
+  // Empty values clear host-level helpers/headers before adding only the
+  // per-user credential. Keep proxy and other non-credential Git settings.
+  const entries = [
+    ["credential.helper", ""],
+    ["http.https://github.com/.extraheader", ""],
+  ];
+  if (token) {
+    entries.push([
+      "http.https://github.com/.extraheader",
+      `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+    ]);
+  }
+  const env = {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: String(entries.length),
+  };
+  entries.forEach(([key, value], index) => {
+    env[`GIT_CONFIG_KEY_${index}`] = key;
+    env[`GIT_CONFIG_VALUE_${index}`] = value;
+  });
+  return env;
+}
+
+function run(cmd, args, cwd, { env = process.env, displayArgs = args, secret = null } = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -14,7 +39,9 @@ function run(cmd, args, cwd, { env = process.env, displayArgs = args } = {}) {
       if (code === 0) resolve(stdout.trim());
       else {
         const output = stderr || stdout;
-        const safeOutput = GITHUB_TOKEN ? output.replaceAll(GITHUB_TOKEN, "[redacted]") : output;
+        const safeOutput = secret
+          ? output.replaceAll(secret, "[redacted]").replaceAll(Buffer.from(`x-access-token:${secret}`).toString("base64"), "[redacted]")
+          : output;
         reject(new Error(`${cmd} ${displayArgs.join(" ")} failed:\n${safeOutput}`));
       }
     });
@@ -39,25 +66,16 @@ export function parseRepoSlug(input) {
 }
 
 /**
- * Clones a repo into destDir using an authenticated HTTPS URL (token is
- * only ever passed as a process arg / injected into a URL that's never
- * logged — it does not go through the shell, so it won't show up in
- * process listings or shell history).
+ * Clones a repo without writing credentials into its origin URL or Git config.
  */
-export async function cloneRepo(repoSlugOrUrl, destDir, { useToken = true } = {}) {
+export async function cloneRepo(repoSlugOrUrl, destDir, { token = GITHUB_TOKEN } = {}) {
   const { owner, repo } = parseRepoSlug(repoSlugOrUrl);
   const url = `https://github.com/${owner}/${repo}.git`;
-  const env = { ...process.env };
-  env.GIT_TERMINAL_PROMPT = "0";
-  if (useToken && GITHUB_TOKEN) {
-    // Avoid putting credentials in argv or in the cloned repo's origin URL.
-    env.GIT_CONFIG_COUNT = "1";
-    env.GIT_CONFIG_KEY_0 = "http.extraheader";
-    env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${GITHUB_TOKEN}`).toString("base64")}`;
-  }
+  const env = gitAuthEnv(token);
   await run("git", ["clone", url, destDir], undefined, {
     env,
     displayArgs: ["clone", url, destDir],
+    secret: token,
   });
   return { owner, repo };
 }
@@ -66,7 +84,7 @@ export async function createBranch(repoDir, branchName) {
   await run("git", ["checkout", "-b", branchName], repoDir);
 }
 
-export async function commitAndPush(repoDir, branchName, message) {
+export async function commitAndPush(repoDir, branchName, message, { token = GITHUB_TOKEN, owner, repo } = {}) {
   await run("git", ["add", "-A"], repoDir);
   // Nothing to commit is not an error worth crashing over — surface it instead.
   try {
@@ -77,21 +95,40 @@ export async function commitAndPush(repoDir, branchName, message) {
     }
     throw e;
   }
-  await run("git", ["push", "-u", "origin", branchName], repoDir);
+  const env = gitAuthEnv(token);
+  if (owner && repo) {
+    const url = `https://github.com/${owner}/${repo}.git`;
+    // Tests run against untrusted code. Pin both fetch and push URLs before
+    // sending the access token so test code cannot redirect the push.
+    await run("git", ["config", "--local", "--replace-all", "remote.origin.url", url], repoDir, { env });
+    await run("git", ["config", "--local", "--replace-all", "remote.origin.pushurl", url], repoDir, { env });
+  }
+  await run("git", ["push", "-u", "origin", branchName], repoDir, {
+    env,
+    secret: token,
+  });
 }
 
-export async function getDefaultBranch(owner, repo) {
-  if (!GITHUB_TOKEN) return "main"; // best-effort fallback for unauthenticated/public use
-  const octokit = new Octokit({ auth: GITHUB_TOKEN });
+export async function getDefaultBranch(owner, repo, token = GITHUB_TOKEN) {
+  if (!token) return "main"; // best-effort fallback for unauthenticated/public use
+  const octokit = new Octokit({ auth: token });
   const { data } = await octokit.repos.get({ owner, repo });
   return data.default_branch;
 }
 
-export async function openPullRequest({ owner, repo, branchName, baseBranch = "main", title, body }) {
-  if (!GITHUB_TOKEN) {
-    throw new Error("GITHUB_TOKEN is not set — cannot open a PR without an authenticated GitHub client.");
+export async function assertCanPushToRepo(owner, repo, token) {
+  if (!token) throw new Error("Connect GitHub before opening a pull request.");
+  const octokit = new Octokit({ auth: token });
+  const { data } = await octokit.repos.get({ owner, repo });
+  if (data.permissions?.push !== true) {
+    throw new Error("Your connected GitHub account does not have write access to this repository.");
   }
-  const octokit = new Octokit({ auth: GITHUB_TOKEN });
+  return data.default_branch;
+}
+
+export async function openPullRequest({ owner, repo, branchName, baseBranch = "main", title, body, token = GITHUB_TOKEN }) {
+  if (!token) throw new Error("A GitHub access token is required to open a pull request.");
+  const octokit = new Octokit({ auth: token });
   const { data } = await octokit.pulls.create({
     owner,
     repo,

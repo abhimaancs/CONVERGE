@@ -31,6 +31,9 @@ function resolveSafe(repoRoot, relPath) {
   if (lexicalRelative === ".." || lexicalRelative.startsWith(`..${path.sep}`) || path.isAbsolute(lexicalRelative)) {
     throw new Error(`Path escapes repo root: ${relPath}`);
   }
+  if (lexicalRelative.split(path.sep).some((part) => part.toLowerCase() === ".git")) {
+    throw new Error("Git metadata is protected from agent file access.");
+  }
 
   // Lexical checks alone miss symlinks committed to the repository. Resolve
   // the target (or its closest existing parent for a new file) before I/O.

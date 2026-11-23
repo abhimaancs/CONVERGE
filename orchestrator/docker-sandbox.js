@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 
 const IMAGE_NAME = "converge-sandbox";
@@ -35,9 +36,16 @@ export function runTestsInSandbox(repoPath) {
       "--tmpfs", "/tmp",
       "-v", `${absRepoPath}:/workspace:rw`,
       "-w", "/workspace",
-      IMAGE_NAME,
-      "pytest", "-q",
     ];
+
+    // Test code is untrusted. Keep Git's hooks, remotes, and index read-only
+    // while tests run so a test cannot redirect a later host-side push or add
+    // a host-executed Git hook to the temporary clone.
+    const gitMetadata = path.join(absRepoPath, ".git");
+    if (fs.existsSync(gitMetadata)) {
+      args.push("-v", `${gitMetadata}:/workspace/.git:ro`);
+    }
+    args.push(IMAGE_NAME, "pytest", "-q");
 
     const proc = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
 

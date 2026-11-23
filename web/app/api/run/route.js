@@ -2,8 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runAgent } from "../../../../orchestrator/agent-core.js";
-import { cloneRepo, parseRepoSlug } from "../../../../orchestrator/github.js";
+import { assertCanPushToRepo, cloneRepo, commitAndPush, createBranch, openPullRequest, parseRepoSlug } from "../../../../orchestrator/github.js";
 import { verifySessionToken } from "../../../lib/auth.js";
+import { getGithubAccessToken } from "../../../lib/github-auth.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -94,11 +95,14 @@ export async function POST(request) {
     return jsonError(error.message, 400);
   }
 
-  // Web accounts are not linked to GitHub identities. A server-wide token
-  // therefore cannot safely authorize a user's request to push to any repo.
-  // Keep write operations disabled here until per-user GitHub OAuth exists.
-  if (openPr) {
-    return jsonError("Opening pull requests is disabled until your GitHub account is connected.", 403);
+  let githubToken = null;
+  try {
+    githubToken = await getGithubAccessToken(username);
+  } catch (error) {
+    if (openPr) return jsonError(error.message, 403);
+  }
+  if (openPr && !githubToken) {
+    return jsonError("Connect GitHub before opening a pull request.", 403);
   }
 
   if (activeUsers.has(username)) return jsonError("You already have a run in progress.", 429);
@@ -141,11 +145,16 @@ export async function POST(request) {
       let tmpDir;
       try {
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "converge-web-"));
-        send(controller, { label: "CLONE", detail: `Cloning public repository ${repository.owner}/${repository.repo}` });
-        // Never use the deployment's GitHub token for user-selected clones.
-        // This lets public repos work while preventing access to private repos
-        // through credentials shared by every account on this deployment.
-        await cloneRepo(`${repository.owner}/${repository.repo}`, tmpDir, { useToken: false });
+        let baseBranch = null;
+        if (openPr) {
+          send(controller, { label: "ACCESS", detail: "Checking your GitHub write access..." });
+          baseBranch = await assertCanPushToRepo(repository.owner, repository.repo, githubToken);
+        }
+
+        send(controller, { label: "CLONE", detail: `Cloning ${githubToken ? "repository" : "public repository"} ${repository.owner}/${repository.repo}` });
+        // Web runs use only the current account's GitHub App token. Without a
+        // connection, cloneRepo receives null and public repositories work unauthenticated.
+        await cloneRepo(`${repository.owner}/${repository.repo}`, tmpDir, { token: githubToken });
         if (aborted) return;
 
         send(controller, { label: "AGENT", detail: "Handing off to the agent loop..." });
@@ -161,7 +170,36 @@ export async function POST(request) {
           send(controller, { type: "result", success: false, reason: result.reason });
           return;
         }
-        send(controller, { type: "result", success: true, attempts: result.attempts, prUrl: null });
+        if (!openPr) {
+          send(controller, { type: "result", success: true, attempts: result.attempts, prUrl: null });
+          return;
+        }
+
+        const branchName = `converge/fix-${Date.now()}`;
+        send(controller, { label: "BRANCH", detail: `Creating branch ${branchName}` });
+        await createBranch(tmpDir, branchName);
+        if (aborted) return;
+
+        send(controller, { label: "COMMIT+PUSH", detail: "Committing the verified fix and pushing your branch..." });
+        await commitAndPush(tmpDir, branchName, `Fix: ${issue.slice(0, 72)}`, {
+          token: githubToken,
+          owner: repository.owner,
+          repo: repository.repo,
+        });
+        if (aborted) return;
+
+        send(controller, { label: "PR", detail: `Opening pull request against ${baseBranch}...` });
+        const pr = await openPullRequest({
+          owner: repository.owner,
+          repo: repository.repo,
+          branchName,
+          baseBranch,
+          title: `Converge: ${issue.slice(0, 72)}`,
+          body: `Automated fix by Converge.\n\n**Issue:**\n${issue}\n\n**Attempts:** ${result.attempts}\n\nPlease review this change before merging.`,
+          token: githubToken,
+        });
+        send(controller, { label: "DONE", detail: `Pull request opened: ${pr.url}` });
+        send(controller, { type: "result", success: true, attempts: result.attempts, prUrl: pr.url });
       } catch (error) {
         if (!aborted) {
           send(controller, { label: "FATAL", detail: error.message });
