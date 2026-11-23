@@ -13,6 +13,7 @@
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "openai": "^6.48.0",
-    "@octokit/rest": "^21.0.0"
+    "@octokit/rest": "^21.0.0",
+    "bcryptjs": "^2.4.3"
   }
 }

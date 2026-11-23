@@ -94,8 +94,15 @@ orchestrator/
   github.js                 clone / branch / commit+push / open PR helpers
   run-full.js                full CLI pipeline: clone -> agent loop -> push -> PR
 web/                  Next.js UI — same agent-core.js, streamed to a browser
-  app/page.js            form + live trace panel
-  app/api/run/route.js    streams agent-core.js events as Server-Sent Events
+  app/page.js            landing page ("/")
+  app/login/page.js       sign-in form
+  app/signup/page.js       create-account form
+  app/app/page.js            auth-gated: redirects to /login if no valid session
+  app/app/ConvergeApp.js       the actual tool (form + live trace panel)
+  app/api/auth/                signup / login / logout route handlers
+  app/api/run/route.js          streams agent-core.js events as SSE; requires a valid session
+  lib/auth.js                    HMAC-signed session tokens
+  lib/users.js                    bcrypt-hashed user store (local JSON file, gitignored)
 ```
 
 ## Setup
@@ -187,28 +194,42 @@ Either way, you'll see printed live to the terminal:
 - If it fails, the error output gets fed back and it tries again (capped at 10 attempts)
 - On success: which attempt it took (and, for `run-full.js`, the PR URL)
 
-## Web UI (live trace, streamed to the browser)
+## Web UI (landing page, login/signup, live trace streamed to the browser)
 
 ```
 cd web
 npm install
 ```
 
-Set the same env vars as before, in the same terminal you'll run `npm run dev` from:
+Set env vars in the same terminal you'll run `npm run dev` from:
 ```
 set GEMINI_API_KEY=your-gemini-key
-set GITHUB_TOKEN=ghp_...          # only needed if you'll check "open a PR"
+set GITHUB_TOKEN=ghp_...          # used by the CLI PR workflow; not by web runs
+set SESSION_SECRET=any-long-random-string
 ```
+`SESSION_SECRET` is what signs session cookies — pick any long random string
+(it doesn't need to be memorable, just not guessable). Without it the server
+throws on the first login/signup attempt, on purpose, rather than silently
+issuing forgeable sessions.
 
 Then:
 ```
 npm run dev
 ```
-Open http://localhost:3000. Enter a repo (`owner/repo`) and an issue description,
-optionally check "open a PR", and hit Run — you'll see the same live trace
-as the CLI (`[PROVIDER]`, `[ATTEMPT 1/10]`, `[TOOL CALL: ...]`, etc.) streamed
-into the browser as it happens, ending in a success/failure banner (with a
-PR link if one was opened).
+Open http://localhost:3000 — you'll land on a marketing-style landing page.
+**Sign up** (creates an account — bcrypt-hashed password, stored in
+`web/data/users.json`, which is gitignored) or **sign in**, which takes you
+to `/app`: the actual tool, now behind a real session check (both the page
+*and* the `/api/run` endpoint itself reject unauthenticated requests — not
+just the page).
+
+At `/app`, enter a public repo (`owner/repo`) and an issue description, then
+hit Run — you'll see the same live trace as the CLI (`[PROVIDER]`,
+`[ATTEMPT 1/10]`, `[TOOL CALL: ...]`, etc.) streamed into the browser. Web
+runs do not use the deployment's GitHub token to clone repositories.
+Pull-request creation is temporarily disabled in the web app until each
+account can connect and authorize its own GitHub identity. The CLI's
+`run-full.js` workflow can still open PRs using `GITHUB_TOKEN`.
 
 Note: `web/` isn't a standalone app — its API route imports directly from
 `../orchestrator/agent-core.js`, `tools.js`, `docker-sandbox.js`, and
@@ -233,13 +254,19 @@ through the sandbox, since that's the actual risk surface.
   fine for small fixes but will get expensive on large files
 - No file-search/embedding — the agent relies on `list_files` + `read_file`,
   which won't scale to large repos before hitting context limits
-- PRs are opened with no review/approval gate — treat every PR as needing
-  human review, not as ready-to-merge
-- Temp clone directories (both CLI's `run-full.js` and the web route) are
-  never cleaned up automatically — they'll accumulate in your OS temp folder
-  over repeated runs; clean them out manually occasionally
-- The web UI has no auth and no concurrency control — one run at a time,
-  local use only; don't deploy this publicly as-is
+- The CLI can open PRs with `GITHUB_TOKEN`; the web app keeps this disabled
+  until GitHub authorization is linked to each account
+- The CLI's `run-full.js` temp clone is left on disk so you can inspect it;
+  web run directories are removed automatically after each run
+- The web UI's auth is real (bcrypt, HMAC-signed sessions, `/api/run`
+  itself checks the session) but is intentionally minimal — no password
+  reset, no rate limiting on login attempts, no email verification, and
+  the user store is a single JSON file, not a real database. Fine for a
+  personal/portfolio deployment; wouldn't scale to real multi-user traffic.
+- The web app allows one run per account and caps each server process at two
+  active runs, three runs per account per hour, and ten total runs per hour.
+  These in-memory limits are intended for a single instance, not a
+  multi-instance public deployment
 
 ## Next steps (not yet built)
 

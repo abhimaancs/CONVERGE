@@ -3,16 +3,20 @@ import { Octokit } from "@octokit/rest";
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
-function run(cmd, args, cwd) {
+function run(cmd, args, cwd, { env = process.env, displayArgs = args } = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     proc.stdout.on("data", (d) => (stdout += d.toString()));
     proc.stderr.on("data", (d) => (stderr += d.toString()));
     proc.on("close", (code) => {
       if (code === 0) resolve(stdout.trim());
-      else reject(new Error(`${cmd} ${args.join(" ")} failed:\n${stderr || stdout}`));
+      else {
+        const output = stderr || stdout;
+        const safeOutput = GITHUB_TOKEN ? output.replaceAll(GITHUB_TOKEN, "[redacted]") : output;
+        reject(new Error(`${cmd} ${displayArgs.join(" ")} failed:\n${safeOutput}`));
+      }
     });
   });
 }
@@ -22,9 +26,15 @@ function run(cmd, args, cwd) {
  * into { owner, repo }.
  */
 export function parseRepoSlug(input) {
-  const cleaned = input.replace(/\.git$/, "").replace(/\/$/, "");
-  const match = cleaned.match(/github\.com[/:]([^/]+)\/([^/]+)$/) || cleaned.match(/^([^/]+)\/([^/]+)$/);
-  if (!match) throw new Error(`Could not parse a GitHub owner/repo out of: ${input}`);
+  if (typeof input !== "string" || input.length > 300) {
+    throw new Error("Repository must be an owner/repo slug or a GitHub HTTPS URL.");
+  }
+
+  const slug = input.trim();
+  const match = slug.match(/^(?:https:\/\/github\.com\/)?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/);
+  if (!match || match[2] === "." || match[2] === "..") {
+    throw new Error("Repository must be a GitHub owner/repo slug or https://github.com/owner/repo URL.");
+  }
   return { owner: match[1], repo: match[2] };
 }
 
@@ -34,12 +44,21 @@ export function parseRepoSlug(input) {
  * logged — it does not go through the shell, so it won't show up in
  * process listings or shell history).
  */
-export async function cloneRepo(repoSlugOrUrl, destDir) {
+export async function cloneRepo(repoSlugOrUrl, destDir, { useToken = true } = {}) {
   const { owner, repo } = parseRepoSlug(repoSlugOrUrl);
-  const authedUrl = GITHUB_TOKEN
-    ? `https://x-access-token:${GITHUB_TOKEN}@github.com/${owner}/${repo}.git`
-    : `https://github.com/${owner}/${repo}.git`;
-  await run("git", ["clone", authedUrl, destDir]);
+  const url = `https://github.com/${owner}/${repo}.git`;
+  const env = { ...process.env };
+  env.GIT_TERMINAL_PROMPT = "0";
+  if (useToken && GITHUB_TOKEN) {
+    // Avoid putting credentials in argv or in the cloned repo's origin URL.
+    env.GIT_CONFIG_COUNT = "1";
+    env.GIT_CONFIG_KEY_0 = "http.extraheader";
+    env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${GITHUB_TOKEN}`).toString("base64")}`;
+  }
+  await run("git", ["clone", url, destDir], undefined, {
+    env,
+    displayArgs: ["clone", url, destDir],
+  });
   return { owner, repo };
 }
 

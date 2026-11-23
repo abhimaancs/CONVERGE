@@ -2,6 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { runTestsInSandbox } from "./docker-sandbox.js";
 
+function pathExists(filePath) {
+  try {
+    fs.lstatSync(filePath);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 /**
  * read_file / write_file operate directly on the host filesystem, not
  * inside the container. That's a deliberate choice: the repo checkout
@@ -15,11 +25,44 @@ import { runTestsInSandbox } from "./docker-sandbox.js";
  * LLM from writing outside the repo (e.g. "../../etc/passwd").
  */
 function resolveSafe(repoRoot, relPath) {
-  const resolved = path.resolve(repoRoot, relPath);
-  if (!resolved.startsWith(path.resolve(repoRoot) + path.sep) && resolved !== path.resolve(repoRoot)) {
+  const root = fs.realpathSync(repoRoot);
+  const resolved = path.resolve(root, relPath);
+  const lexicalRelative = path.relative(root, resolved);
+  if (lexicalRelative === ".." || lexicalRelative.startsWith(`..${path.sep}`) || path.isAbsolute(lexicalRelative)) {
     throw new Error(`Path escapes repo root: ${relPath}`);
   }
+
+  // Lexical checks alone miss symlinks committed to the repository. Resolve
+  // the target (or its closest existing parent for a new file) before I/O.
+  let existing = resolved;
+  while (!pathExists(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) throw new Error(`Path escapes repo root: ${relPath}`);
+    existing = parent;
+  }
+  const actual = fs.realpathSync(existing);
+  const actualRelative = path.relative(root, actual);
+  if (actualRelative === ".." || actualRelative.startsWith(`..${path.sep}`) || path.isAbsolute(actualRelative)) {
+    throw new Error(`Path escapes repo root through a symlink: ${relPath}`);
+  }
   return resolved;
+}
+
+function assertSafeParent(repoRoot, filePath, relPath) {
+  const root = fs.realpathSync(repoRoot);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const actualParent = fs.realpathSync(path.dirname(filePath));
+  const relative = path.relative(root, actualParent);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`Path escapes repo root through a symlink: ${relPath}`);
+  }
+  if (pathExists(filePath)) {
+    const actualFile = fs.realpathSync(filePath);
+    const fileRelative = path.relative(root, actualFile);
+    if (fileRelative === ".." || fileRelative.startsWith(`..${path.sep}`) || path.isAbsolute(fileRelative)) {
+      throw new Error(`Path escapes repo root through a symlink: ${relPath}`);
+    }
+  }
 }
 
 export function makeTools(repoRoot) {
@@ -52,7 +95,7 @@ export function makeTools(repoRoot) {
         };
       }
 
-      fs.mkdirSync(path.dirname(full), { recursive: true });
+      assertSafeParent(repoRoot, full, relPath);
       fs.writeFileSync(full, content, "utf-8");
       return { ok: true, path: relPath };
     },

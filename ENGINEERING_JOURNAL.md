@@ -30,6 +30,16 @@ OpenAI-compatible chat-completions interface, so switching providers is a
 `baseURL`/`apiKey` change, not a rewrite. This mattered a lot in practice —
 see the free-tier section below.
 
+**Real auth, deliberately minimal.** Bcrypt for password hashing (via
+`bcryptjs` — pure JS, no native compile step, which matters a lot on
+Windows where a missing C++ toolchain silently breaks native-module
+installs), HMAC-signed session cookies instead of a full session store or
+JWT library (one claim — the username — doesn't need either), and a plain
+JSON file instead of a real database. The bar was "actually protects the
+app" (both the `/app` page and the `/api/run` endpoint itself reject
+unauthenticated requests) without over-building infrastructure a
+single/small-user portfolio project doesn't need.
+
 ## Bugs found and fixed, in the order they actually happened
 
 ### 1. Windows path comparison silently no-oped the CLI
