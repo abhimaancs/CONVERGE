@@ -68,6 +68,7 @@ Rules:
 
 /**
  * Wraps the API call with retry/backoff for transient failures:
+ *  - 408 and 5xx (temporary provider/server failures), including Gemini 503s
  *  - 429 (rate limit) — free tiers enforce fairly tight requests-per-minute caps
  *  - connection timeouts / dropped connections — free/shared endpoints under
  *    load occasionally hang or reset a request; these are worth one retry
@@ -75,8 +76,8 @@ Rules:
  * Genuine errors (bad auth, malformed request, model not found) are NOT
  * retried — waiting won't fix those, so they surface immediately.
  */
-function isRetryable(err) {
-  if (err?.status === 429) return true;
+export function isRetryable(err) {
+  if ([408, 429, 500, 502, 503, 504].includes(err?.status)) return true;
   const msg = (err?.message || "").toLowerCase();
   return (
     err?.name === "APIConnectionTimeoutError" ||
@@ -95,11 +96,16 @@ async function callModelWithRetry(client, params, onEvent, { maxRetries = 6, bas
     } catch (err) {
       if (!isRetryable(err) || i === maxRetries) throw err;
       const isRateLimit = err?.status === 429;
+      const isProviderUnavailable = err?.status >= 500;
       // Per-minute rate limits reset roughly every 60s, so it's worth waiting
       // closer to that regardless of retry count, capped so it doesn't spiral
       // (65s, 65s, 65s... vs connection issues, which back off more gently).
       const delay = isRateLimit ? 65_000 : baseDelayMs * (i + 1);
-      const reason = isRateLimit ? "Rate limited (429)" : `Connection issue (${err?.message || "unknown"})`;
+      const reason = isRateLimit
+        ? "Rate limited (429)"
+        : isProviderUnavailable
+          ? `Provider temporarily unavailable (${err.status})`
+          : `Connection issue (${err?.message || "unknown"})`;
       onEvent({ type: "retrying", label: "RETRYING", detail: `${reason} — backing off ${Math.round(delay / 1000)}s before retry ${i + 1}/${maxRetries}...` });
       await new Promise((resolve) => setTimeout(resolve, delay));
     }

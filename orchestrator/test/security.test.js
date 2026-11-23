@@ -5,7 +5,17 @@ import path from "node:path";
 import test from "node:test";
 import { parseRepoSlug } from "../github.js";
 import { makeTools } from "../tools.js";
+import { isRetryable } from "../agent-core.js";
 import { createGithubAuthorizationFlow, verifyGithubAuthorizationFlow } from "../../web/lib/github-auth.js";
+
+test("model retries transient provider errors such as Gemini 503", () => {
+  for (const status of [408, 429, 500, 502, 503, 504]) {
+    assert.equal(isRetryable({ status }), true, `status ${status} should be retried`);
+  }
+  for (const status of [400, 401, 404]) {
+    assert.equal(isRetryable({ status }), false, `status ${status} should fail immediately`);
+  }
+});
 
 test("parseRepoSlug accepts canonical GitHub slugs and HTTPS URLs", () => {
   assert.deepEqual(parseRepoSlug("abhimaancs/CONVERGE"), {
