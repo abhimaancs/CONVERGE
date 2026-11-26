@@ -7,10 +7,8 @@ def slugify(text):
     """
     text = text.strip().lower()
     text = re.sub(r"[^a-z0-9\s-]", "", text)
-    # BUG: collapses runs of whitespace into a single space instead of a
-    # single hyphen, and never converts remaining spaces to hyphens at all —
-    # so "hello   world" becomes "hello world" instead of "hello-world".
-    text = re.sub(r"\s+", " ", text)
+    # Replace runs of whitespace with a single hyphen
+    text = re.sub(r"\s+", "-", text)
     return text
 
 
