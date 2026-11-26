@@ -10,9 +10,8 @@ def subtract(a, b):
 
 
 def divide(a, b):
-    # BUG: uses integer division instead of true division,
-    # so divide(7, 2) returns 3 instead of 3.5
-    return a // b
+    # FIX: use true division instead of integer division
+    return a / b
 
 
 def average(numbers):
