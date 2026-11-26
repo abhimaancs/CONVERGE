@@ -5,6 +5,30 @@ import path from "node:path";
 const IMAGE_NAME = "converge-sandbox";
 const TIMEOUT_MS = 30_000;
 
+/** Resolve a test working directory without allowing it to escape the repo. */
+export function resolveTestDirectory(repoPath, requestedPath = ".") {
+  const repoRoot = fs.realpathSync(path.resolve(repoPath));
+  const requested = typeof requestedPath === "string" && requestedPath.trim()
+    ? requestedPath.trim()
+    : ".";
+  const candidate = path.resolve(repoRoot, requested);
+  const relativeCandidate = path.relative(repoRoot, candidate);
+  if (relativeCandidate === ".." || relativeCandidate.startsWith(`..${path.sep}`) || path.isAbsolute(relativeCandidate)) {
+    throw new Error("Test directory must stay inside the repository.");
+  }
+
+  const realCandidate = fs.realpathSync(candidate);
+  const relativeReal = path.relative(repoRoot, realCandidate);
+  if (relativeReal === ".." || relativeReal.startsWith(`..${path.sep}`) || path.isAbsolute(relativeReal)) {
+    throw new Error("Test directory must stay inside the repository.");
+  }
+  if (!fs.statSync(realCandidate).isDirectory()) {
+    throw new Error("Test path must be a directory.");
+  }
+
+  return relativeReal ? relativeReal.split(path.sep).join(path.posix.sep) : ".";
+}
+
 /**
  * Runs `pytest` for the given repo inside a locked-down, disposable
  * Docker container and returns { passed, output }.
@@ -21,9 +45,16 @@ const TIMEOUT_MS = 30_000;
  *  timeout          a hung test (e.g. an infinite loop the LLM introduced)
  *                   can't block the agent loop forever
  */
-export function runTestsInSandbox(repoPath) {
+export function runTestsInSandbox(repoPath, testPath = ".") {
   return new Promise((resolve) => {
     const absRepoPath = path.resolve(repoPath);
+    let relativeTestPath;
+    try {
+      relativeTestPath = resolveTestDirectory(absRepoPath, testPath);
+    } catch (err) {
+      resolve({ passed: false, output: err.message });
+      return;
+    }
 
     const args = [
       "run",
@@ -35,7 +66,7 @@ export function runTestsInSandbox(repoPath) {
       "--read-only",
       "--tmpfs", "/tmp",
       "-v", `${absRepoPath}:/workspace:rw`,
-      "-w", "/workspace",
+      "-w", relativeTestPath === "." ? "/workspace" : path.posix.join("/workspace", relativeTestPath),
     ];
 
     // Test code is untrusted. Keep Git's hooks, remotes, and index read-only

@@ -50,6 +50,9 @@ Your loop:
    to call it more than once, or once per directory).
 2. Use run_tests early to see which tests fail and why — the failure output
    usually tells you which file is responsible.
+   When the issue targets a subproject, pass that directory as run_tests' path
+   (for example, path "toy-repo" for toy-repo/calculator.py) so unrelated
+   projects elsewhere in the repository don't block the fix.
 3. Use read_file only on the specific file(s) that look relevant, not every file.
 4. Use write_file to make a fix.
 5. Use run_tests again to check whether your fix works.

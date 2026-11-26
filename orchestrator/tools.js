@@ -130,8 +130,8 @@ export function makeTools(repoRoot) {
       return { files: results.sort() };
     },
 
-    async run_tests() {
-      const result = await runTestsInSandbox(repoRoot);
+    async run_tests({ path: testPath = "." } = {}) {
+      const result = await runTestsInSandbox(repoRoot, testPath);
       return result;
     },
   };
@@ -184,8 +184,11 @@ export const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "run_tests",
-      description: "Run the test suite inside an isolated sandbox container and return pass/fail plus full output (stdout+stderr).",
-      parameters: { type: "object", properties: {} },
+      description: "Run tests inside an isolated sandbox container. If the issue is about a subproject or folder, pass its repo-relative directory (for example, path='toy-repo' when fixing toy-repo/calculator.py) so unrelated projects' tests do not block the fix. Omit path to test the repository root.",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string", description: "Repo-relative directory to run pytest from; defaults to the repository root." } },
+      },
     },
   },
 ];

@@ -6,6 +6,7 @@ import test from "node:test";
 import { parseRepoSlug } from "../github.js";
 import { makeTools } from "../tools.js";
 import { isRetryable } from "../agent-core.js";
+import { resolveTestDirectory } from "../docker-sandbox.js";
 import { createGithubAuthorizationFlow, verifyGithubAuthorizationFlow } from "../../web/lib/github-auth.js";
 
 test("model retries transient provider errors such as Gemini 503", () => {
@@ -15,6 +16,16 @@ test("model retries transient provider errors such as Gemini 503", () => {
   for (const status of [400, 401, 404]) {
     assert.equal(isRetryable({ status }), false, `status ${status} should fail immediately`);
   }
+});
+
+test("test directory stays inside the repository and resolves subprojects", (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "converge-test-path-"));
+  const projectRoot = path.join(tempRoot, "toy-repo");
+  fs.mkdirSync(projectRoot);
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+  assert.equal(resolveTestDirectory(tempRoot, "toy-repo"), "toy-repo");
+  assert.equal(resolveTestDirectory(tempRoot), ".");
+  assert.throws(() => resolveTestDirectory(tempRoot, "../outside"), /stay inside/);
 });
 
 test("parseRepoSlug accepts canonical GitHub slugs and HTTPS URLs", () => {
