@@ -6,8 +6,8 @@ import ThemeToggle from "./components/ThemeToggle.js";
 const STEPS = [
   { label: "Read", icon: "◎", desc: "Navigates and reads relevant files" },
   { label: "Fix",  icon: "◈", desc: "Writes a targeted patch" },
-  { label: "Test", icon: "◇", desc: "Runs pytest in an isolated container" },
-  { label: "Retry", icon: "↻", desc: "Retries until tests pass" },
+  { label: "Test", icon: "◇", desc: "Runs Python or npm checks in an isolated container" },
+  { label: "Retry", icon: "↻", desc: "Retries until checks pass" },
 ];
 
 const FEATURES = [
