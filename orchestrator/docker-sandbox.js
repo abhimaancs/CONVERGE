@@ -194,7 +194,9 @@ async function runNpmCheck(repoPath, relativeTestPath, projectCheck) {
       "-e", "RAYON_NUM_THREADS=2",
       "-e", "UV_THREADPOOL_SIZE=2",
       "-v", `${repoPath}:/workspace:rw`,
-      "-v", `${volumeName}:${nodeModulesContainerPath}:ro`
+      // Build tools such as Vite write temporary config/cache files under
+      // node_modules. This is an isolated throwaway Docker volume, not the repo.
+      "-v", `${volumeName}:${nodeModulesContainerPath}`
     );
     appendGitReadOnlyMount(checkArgs, repoPath);
     checkArgs.push("-w", workspacePath, IMAGE_NAME, ...projectCheck.command);
