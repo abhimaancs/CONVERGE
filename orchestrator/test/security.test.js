@@ -6,7 +6,7 @@ import test from "node:test";
 import { parseRepoSlug } from "../github.js";
 import { makeTools } from "../tools.js";
 import { isRetryable, requiresBehavioralTests } from "../agent-core.js";
-import { detectProjectCheck, resolveTestDirectory } from "../docker-sandbox.js";
+import { detectProjectCheck, isPackageLockOutOfSync, resolveTestDirectory } from "../docker-sandbox.js";
 import { createGithubAuthorizationFlow, verifyGithubAuthorizationFlow } from "../../web/lib/github-auth.js";
 
 test("model retries transient provider errors such as Gemini 503", () => {
@@ -81,6 +81,14 @@ test("npm checks require a lockfile and valid package metadata", (t) => {
 
   fs.writeFileSync(path.join(tempRoot, "package.json"), "{");
   assert.equal(detectProjectCheck(tempRoot).kind, "error");
+});
+
+test("npm lockfile mismatches are recognized for safe regeneration", () => {
+  assert.equal(
+    isPackageLockOutOfSync("npm ci can only install packages when your package.json and package-lock.json are in sync."),
+    true
+  );
+  assert.equal(isPackageLockOutOfSync("npm registry is temporarily unavailable"), false);
 });
 
 test("parseRepoSlug accepts canonical GitHub slugs and HTTPS URLs", () => {
