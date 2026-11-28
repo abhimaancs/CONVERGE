@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { makeTools, TOOL_DEFINITIONS } from "./tools.js";
 
-const MAX_ATTEMPTS = 12; // leave room to add and verify a focused regression test
+const MAX_ATTEMPTS = 16; // leave room to add, install, and verify a focused regression test
 
 const BEHAVIORAL_ISSUE_PATTERN = /\b(?:bug|wrong|incorrect|expected|should|returns?|returning|persist(?:s|ed|ence)?|refresh(?:es|ed)?|reload(?:s|ed)?|save(?:s|d)?|restore(?:s|d)?|clear(?:s|ed|ing)?|vanish(?:es|ed)?|disappear(?:s|ed)?|los(?:e|es|t)|break(?:s|ing|en)?|cart|quantity|count|total|display|render|show|hide|calculate|validation|validate|crash(?:es|ed)?|regression|feature)\b/i;
 
@@ -64,8 +64,10 @@ Your loop:
    "npm run build". Treat a build result as a build check, not as a test suite.
    For behavior changes or bug fixes, add or update a focused regression test
    that would fail before the fix and pass after it. If no test command exists,
-   add a small test using the project's existing tools or a native test runner
-   and configure "npm test". A passing build alone cannot verify behavior.
+   prefer the project's existing tools or a native test runner; add and
+   configure a small test command when needed. Do not hand-edit package-lock.json:
+   run_tests will safely refresh it if package.json changes. A passing build alone
+   cannot verify behavior.
 3. Use read_file only on the specific file(s) that look relevant, not every file.
 4. Use write_file to make a fix.
 5. Use run_tests again to check whether your fix works.
