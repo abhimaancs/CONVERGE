@@ -49,7 +49,8 @@ Your loop:
 1. Call list_files once to see the whole repo tree (it's recursive — no need
    to call it more than once, or once per directory).
 2. Use run_tests early to see which tests fail and why — the failure output
-   usually tells you which file is responsible.
+   usually tells you which file is responsible. A passing baseline check does
+   not mean the requested fix is done; continue to implement the issue.
    When the issue targets a subproject, pass that directory as run_tests' path
    (for example, path "toy-repo" for toy-repo/calculator.py) so unrelated
    projects elsewhere in the repository don't block the fix.
@@ -59,8 +60,9 @@ Your loop:
 4. Use write_file to make a fix.
 5. Use run_tests again to check whether your fix works.
 6. If tests fail, read the error output carefully, form a new hypothesis, and try again.
-7. Once run_tests reports passed: true, stop and summarize the fix and the
-   verification performed in plain text (no more tool calls).
+7. Stop and summarize only after you have changed a file for the requested fix
+   and a later run_tests reports passed: true. A passing check without any
+   actual file changes is not a completed fix.
 
 Rules:
 - Make the smallest change that correctly fixes the issue. Don't rewrite unrelated code.
@@ -136,6 +138,7 @@ export async function runAgent({ repoRoot, issue, onEvent = () => {} }) {
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: `Repo root is mounted and ready. Here is the issue to fix:\n\n${issue}` },
   ];
+  const writtenFiles = new Map();
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     onEvent({ type: "attempt", label: `ATTEMPT ${attempt}/${MAX_ATTEMPTS}`, detail: `Calling ${gemini ? "Gemini" : "OpenRouter"}...` });
@@ -161,6 +164,7 @@ export async function runAgent({ repoRoot, issue, onEvent = () => {} }) {
     }
 
     let sawPassingRun = false;
+    let changesAfterPassingRun = false;
 
     for (const call of toolCalls) {
       const name = call.function.name;
@@ -175,8 +179,18 @@ export async function runAgent({ repoRoot, issue, onEvent = () => {} }) {
       const result = await tools[name](args);
       onEvent({ type: "tool_result", label: `TOOL RESULT: ${name}`, detail: typeof result === "string" ? result : JSON.stringify(result).slice(0, 2000) });
 
+      if (name === "write_file" && result?.ok && typeof result.path === "string") {
+        const current = writtenFiles.get(result.path);
+        writtenFiles.set(result.path, {
+          before: current ? current.before : result.previousHash,
+          after: result.contentHash,
+        });
+        if (result.changed) changesAfterPassingRun = true;
+      }
+
       if (name === "run_tests" && result.passed) {
         sawPassingRun = true;
+        changesAfterPassingRun = false;
       }
 
       messages.push({
@@ -186,7 +200,15 @@ export async function runAgent({ repoRoot, issue, onEvent = () => {} }) {
       });
     }
 
-    if (sawPassingRun) {
+    if (sawPassingRun && !changesAfterPassingRun) {
+      const hasActualChanges = [...writtenFiles.values()].some(({ before, after }) => before !== after);
+      if (!hasActualChanges) {
+        const detail = "The check passed, but no file changes were made. The requested fix is not complete yet.";
+        onEvent({ type: "changes_needed", label: "CHANGE NEEDED", detail });
+        messages.push({ role: "user", content: `${detail} Inspect the relevant source, implement the requested change with write_file, then run the check again.` });
+        continue;
+      }
+
       const checkType = messages
         .filter((entry) => entry.role === "tool")
         .map((entry) => {
