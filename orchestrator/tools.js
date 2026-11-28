@@ -184,10 +184,10 @@ export const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "run_tests",
-      description: "Run tests inside an isolated sandbox container. If the issue is about a subproject or folder, pass its repo-relative directory (for example, path='toy-repo' when fixing toy-repo/calculator.py) so unrelated projects' tests do not block the fix. Omit path to test the repository root.",
+      description: "Run project checks inside an isolated Docker sandbox: pytest for Python projects, npm test for npm projects with a test script, or npm run build when no npm test script exists. Node projects need package-lock.json. If the issue targets a subproject, pass its repo-relative directory (for example, path='toy-repo' for toy-repo/calculator.py) so unrelated projects' checks do not block the fix. Omit path to check the repository root.",
       parameters: {
         type: "object",
-        properties: { path: { type: "string", description: "Repo-relative directory to run pytest from; defaults to the repository root." } },
+        properties: { path: { type: "string", description: "Repo-relative project directory to check; defaults to the repository root." } },
       },
     },
   },
