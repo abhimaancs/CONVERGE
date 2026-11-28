@@ -1,7 +1,13 @@
 import OpenAI from "openai";
 import { makeTools, TOOL_DEFINITIONS } from "./tools.js";
 
-const MAX_ATTEMPTS = 10; // was 6 — too tight for repos needing real exploration before a fix
+const MAX_ATTEMPTS = 12; // leave room to add and verify a focused regression test
+
+const BEHAVIORAL_ISSUE_PATTERN = /\b(?:bug|wrong|incorrect|expected|should|returns?|returning|persist(?:s|ed|ence)?|refresh(?:es|ed)?|reload(?:s|ed)?|save(?:s|d)?|restore(?:s|d)?|clear(?:s|ed|ing)?|vanish(?:es|ed)?|disappear(?:s|ed)?|los(?:e|es|t)|break(?:s|ing|en)?|cart|quantity|count|total|display|render|show|hide|calculate|validation|validate|crash(?:es|ed)?|regression|feature)\b/i;
+
+export function requiresBehavioralTests(issue) {
+  return BEHAVIORAL_ISSUE_PATTERN.test(issue || "");
+}
 
 // Two providers supported, both via the OpenAI SDK's OpenAI-compatible
 // interface. Constructed lazily (inside getClient/getModel, called at the
@@ -56,6 +62,10 @@ Your loop:
    projects elsewhere in the repository don't block the fix.
    For npm projects, run_tests uses "npm test" when present, otherwise
    "npm run build". Treat a build result as a build check, not as a test suite.
+   For behavior changes or bug fixes, add or update a focused regression test
+   that would fail before the fix and pass after it. If no test command exists,
+   add a small test using the project's existing tools or a native test runner
+   and configure "npm test". A passing build alone cannot verify behavior.
 3. Use read_file only on the specific file(s) that look relevant, not every file.
 4. Use write_file to make a fix.
 5. Use run_tests again to check whether your fix works.
@@ -67,6 +77,7 @@ Your loop:
 Rules:
 - Make the smallest change that correctly fixes the issue. Don't rewrite unrelated code.
 - Always call run_tests after write_file before declaring victory.
+- For behavior changes, do not declare victory without a passing regression test.
 - If you're stuck after a couple of failed attempts, reconsider your assumptions about
   the bug rather than repeating the same fix.
 - Be decisive: once run_tests output plus reading the directly-relevant source file
@@ -165,6 +176,7 @@ export async function runAgent({ repoRoot, issue, onEvent = () => {} }) {
 
     let sawPassingRun = false;
     let changesAfterPassingRun = false;
+    let passingVerification = null;
 
     for (const call of toolCalls) {
       const name = call.function.name;
@@ -188,9 +200,14 @@ export async function runAgent({ repoRoot, issue, onEvent = () => {} }) {
         if (result.changed) changesAfterPassingRun = true;
       }
 
-      if (name === "run_tests" && result.passed) {
-        sawPassingRun = true;
-        changesAfterPassingRun = false;
+      if (name === "run_tests") {
+        sawPassingRun = Boolean(result.passed);
+        if (result.passed) {
+          changesAfterPassingRun = false;
+          passingVerification = result.verification || "tests";
+        } else {
+          passingVerification = null;
+        }
       }
 
       messages.push({
@@ -209,14 +226,14 @@ export async function runAgent({ repoRoot, issue, onEvent = () => {} }) {
         continue;
       }
 
-      const checkType = messages
-        .filter((entry) => entry.role === "tool")
-        .map((entry) => {
-          try { return JSON.parse(entry.content); } catch { return null; }
-        })
-        .filter((entry) => entry?.passed)
-        .at(-1)?.verification;
-      const checkLabel = checkType === "build" ? "Build" : "Checks";
+      if (requiresBehavioralTests(issue) && passingVerification !== "tests") {
+        const detail = "The build passed, but this behavior change needs a passing regression test before it can be marked fixed.";
+        onEvent({ type: "tests_needed", label: "TEST NEEDED", detail });
+        messages.push({ role: "user", content: `${detail} Add or update a focused test for the reported behavior, make the project test command run it, then run the tests again. Do not treat another build-only pass as verification.` });
+        continue;
+      }
+
+      const checkLabel = passingVerification === "build" ? "Build" : "Tests";
       onEvent({ type: "success", label: "SUCCESS", detail: `${checkLabel} passed on attempt ${attempt}.` });
       return { success: true, attempts: attempt, messages };
     }
