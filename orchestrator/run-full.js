@@ -29,7 +29,7 @@ async function main() {
   const result = await runAgent({ repoRoot: tmpDir, issue, onEvent: (e) => logTrace(e.label, e.detail) });
 
   if (!result.success) {
-    logTrace("STOPPING", `Agent did not reach a passing test run (${result.reason}). Repo left at ${tmpDir} for inspection. No branch pushed, no PR opened.`);
+    logTrace("STOPPING", `Agent did not reach a successful verification (${result.reason}). Repo left at ${tmpDir} for inspection. No branch pushed, no PR opened.`);
     process.exit(1);
   }
 
