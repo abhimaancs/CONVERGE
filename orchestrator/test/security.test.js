@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { parseRepoSlug } from "../github.js";
 import { makeTools } from "../tools.js";
-import { isRetryable } from "../agent-core.js";
+import { isRetryable, requiresBehavioralTests } from "../agent-core.js";
 import { detectProjectCheck, resolveTestDirectory } from "../docker-sandbox.js";
 import { createGithubAuthorizationFlow, verifyGithubAuthorizationFlow } from "../../web/lib/github-auth.js";
 
@@ -16,6 +16,18 @@ test("model retries transient provider errors such as Gemini 503", () => {
   for (const status of [400, 401, 404]) {
     assert.equal(isRetryable({ status }), false, `status ${status} should fail immediately`);
   }
+});
+
+test("behavioral bug reports require a regression test, not only a build", () => {
+  assert.equal(
+    requiresBehavioralTests("The shopping cart clears when the page is refreshed. Save and restore it."),
+    true
+  );
+  assert.equal(
+    requiresBehavioralTests("Fix divide so divide(7, 2) returns 3.5 instead of 3."),
+    true
+  );
+  assert.equal(requiresBehavioralTests("Update the production build configuration."), false);
 });
 
 test("test directory stays inside the repository and resolves subprojects", (t) => {
