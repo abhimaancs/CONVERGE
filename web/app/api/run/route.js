@@ -166,7 +166,7 @@ export async function POST(request) {
 
         if (aborted) return;
         if (!result.success) {
-          send(controller, { label: "STOPPED", detail: `Agent did not reach a passing test run (${result.reason}).` });
+          send(controller, { label: "STOPPED", detail: `Agent did not reach a successful verification (${result.reason}).` });
           send(controller, { type: "result", success: false, reason: result.reason });
           return;
         }
