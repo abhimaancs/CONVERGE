@@ -53,11 +53,14 @@ Your loop:
    When the issue targets a subproject, pass that directory as run_tests' path
    (for example, path "toy-repo" for toy-repo/calculator.py) so unrelated
    projects elsewhere in the repository don't block the fix.
+   For npm projects, run_tests uses "npm test" when present, otherwise
+   "npm run build". Treat a build result as a build check, not as a test suite.
 3. Use read_file only on the specific file(s) that look relevant, not every file.
 4. Use write_file to make a fix.
 5. Use run_tests again to check whether your fix works.
 6. If tests fail, read the error output carefully, form a new hypothesis, and try again.
-7. Once run_tests reports passed: true, stop and summarize the fix in plain text (no more tool calls).
+7. Once run_tests reports passed: true, stop and summarize the fix and the
+   verification performed in plain text (no more tool calls).
 
 Rules:
 - Make the smallest change that correctly fixes the issue. Don't rewrite unrelated code.
@@ -154,7 +157,7 @@ export async function runAgent({ repoRoot, issue, onEvent = () => {} }) {
 
     if (toolCalls.length === 0) {
       onEvent({ type: "done_no_tools", label: "DONE", detail: "No further tool calls — agent considers the task complete or has given up." });
-      return { success: false, reason: "Model stopped without a passing test run.", messages };
+      return { success: false, reason: "Model stopped without a successful verification.", messages };
     }
 
     let sawPassingRun = false;
@@ -184,11 +187,19 @@ export async function runAgent({ repoRoot, issue, onEvent = () => {} }) {
     }
 
     if (sawPassingRun) {
-      onEvent({ type: "success", label: "SUCCESS", detail: `Tests passed on attempt ${attempt}.` });
+      const checkType = messages
+        .filter((entry) => entry.role === "tool")
+        .map((entry) => {
+          try { return JSON.parse(entry.content); } catch { return null; }
+        })
+        .filter((entry) => entry?.passed)
+        .at(-1)?.verification;
+      const checkLabel = checkType === "build" ? "Build" : "Checks";
+      onEvent({ type: "success", label: "SUCCESS", detail: `${checkLabel} passed on attempt ${attempt}.` });
       return { success: true, attempts: attempt, messages };
     }
   }
 
-  onEvent({ type: "failed", label: "FAILED", detail: `No passing test run after ${MAX_ATTEMPTS} attempts.` });
+  onEvent({ type: "failed", label: "FAILED", detail: `No successful verification after ${MAX_ATTEMPTS} attempts.` });
   return { success: false, reason: `Exceeded max attempts (${MAX_ATTEMPTS})`, messages };
 }
