@@ -1,10 +1,12 @@
-FROM python:3.12-slim
+FROM node:24-bookworm-slim
 
 # No network access needed inside the sandbox — the repo is mounted in,
 # tests run against it, results come out. Nothing installed at runtime
 # beyond what's baked in here, which limits what an LLM-written "fix"
 # could actually do even if it tried something malicious.
-RUN pip install --no-cache-dir pytest
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-pytest \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 
