@@ -32,7 +32,7 @@ Abridged trace from an actual successful run against a live GitHub repo
 [TOOL CALL: run_tests]
 {"passed":true,"output":"3 passed in 0.23s"}
 
-[SUCCESS] Tests passed on attempt 5.
+[SUCCESS] Checks passed on attempt 5.
 [PR] https://github.com/abhimaancs/converge-test-repo/pull/1
 ```
 
@@ -113,6 +113,8 @@ web/                  Next.js UI — same agent-core.js, streamed to a browser
    cd sandbox
    docker build -t converge-sandbox .
    ```
+   Rebuild this image after updating Converge so it includes Node.js and the
+   Python test tools used by the current runner.
 3. Install orchestrator deps:
    ```
    cd orchestrator
@@ -189,8 +191,9 @@ against — don't hand it a token with broader access than that.
 Either way, you'll see printed live to the terminal:
 - The model calling `list_files` / `read_file` to look around
 - The model calling `write_file` with its proposed fix
-- The model calling `run_tests` — which spins up a fresh, network-isolated,
-  resource-capped container, runs pytest inside it, and returns the result
+- The model calling `run_tests` — which runs Python `pytest`, or for npm
+  projects runs `npm test` (falling back to `npm run build`) in a resource-
+  capped container, then returns the result
 - If it fails, the error output gets fed back and it tries again (capped at 10 attempts)
 - On success: which attempt it took (and, for `run-full.js`, the PR URL)
 
@@ -259,16 +262,21 @@ two front ends.
 
 ## Why the sandbox is a real container and not just a subprocess
 
-The checkout is bind-mounted for test runs, while `.git` is mounted read-only
+The checkout is bind-mounted for checks, while `.git` is mounted read-only
 so untrusted test code cannot rewrite remotes or Git hooks before a host-side
-push. The container has `--network none` (nothing it runs can reach the
-internet or your LAN), a read-only root filesystem, resource caps, and a hard
-timeout. Agent file edits happen on the host; only *executing* repository code
-goes through the sandbox.
+push. Python tests and npm test/build commands run with `--network none`.
+For npm projects, dependencies are first installed from `package-lock.json`
+in a temporary, resource-capped container; npm lifecycle scripts are disabled
+during installation, and the actual check runs offline. Node projects need an
+npm lockfile. The containers have read-only root filesystems, resource caps,
+and hard timeouts. Agent file edits happen on the host; only *executing*
+repository code goes through the sandbox.
 
 ## Known rough edges (expected at this stage)
 
-- Only Python/pytest is supported — no language/test-runner detection yet
+- Python/pytest and npm projects are supported. npm projects use `npm test`
+  when available, otherwise `npm run build`; they need `package-lock.json`.
+  Other JavaScript package managers and other languages are not detected yet.
 - `write_file` fully overwrites a file rather than diffing/patching, which is
   fine for small fixes but will get expensive on large files
 - No file-search/embedding — the agent relies on `list_files` + `read_file`,
