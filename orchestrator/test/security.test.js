@@ -6,7 +6,7 @@ import test from "node:test";
 import { parseRepoSlug } from "../github.js";
 import { makeTools } from "../tools.js";
 import { isRetryable } from "../agent-core.js";
-import { resolveTestDirectory } from "../docker-sandbox.js";
+import { detectProjectCheck, resolveTestDirectory } from "../docker-sandbox.js";
 import { createGithubAuthorizationFlow, verifyGithubAuthorizationFlow } from "../../web/lib/github-auth.js";
 
 test("model retries transient provider errors such as Gemini 503", () => {
@@ -26,6 +26,49 @@ test("test directory stays inside the repository and resolves subprojects", (t) 
   assert.equal(resolveTestDirectory(tempRoot, "toy-repo"), "toy-repo");
   assert.equal(resolveTestDirectory(tempRoot), ".");
   assert.throws(() => resolveTestDirectory(tempRoot, "../outside"), /stay inside/);
+});
+
+test("project checks select pytest or the locked npm test/build command", (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "converge-project-check-"));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+
+  const pythonProject = path.join(tempRoot, "python");
+  const npmTestProject = path.join(tempRoot, "npm-test");
+  const npmBuildProject = path.join(tempRoot, "npm-build");
+  for (const directory of [pythonProject, npmTestProject, npmBuildProject]) fs.mkdirSync(directory);
+
+  assert.deepEqual(detectProjectCheck(pythonProject), {
+    kind: "pytest",
+    command: ["pytest", "-q"],
+    verification: "tests",
+  });
+
+  fs.writeFileSync(path.join(npmTestProject, "package.json"), JSON.stringify({ scripts: { test: "vitest run", build: "vite build" } }));
+  fs.writeFileSync(path.join(npmTestProject, "package-lock.json"), "{}");
+  assert.deepEqual(detectProjectCheck(npmTestProject), {
+    kind: "npm-test",
+    command: ["npm", "run", "test"],
+    verification: "tests",
+  });
+
+  fs.writeFileSync(path.join(npmBuildProject, "package.json"), JSON.stringify({ scripts: { build: "next build" } }));
+  fs.writeFileSync(path.join(npmBuildProject, "package-lock.json"), "{}");
+  assert.deepEqual(detectProjectCheck(npmBuildProject), {
+    kind: "npm-build",
+    command: ["npm", "run", "build"],
+    verification: "build",
+  });
+});
+
+test("npm checks require a lockfile and valid package metadata", (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "converge-project-check-error-"));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+
+  fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
+  assert.equal(detectProjectCheck(tempRoot).kind, "error");
+
+  fs.writeFileSync(path.join(tempRoot, "package.json"), "{");
+  assert.equal(detectProjectCheck(tempRoot).kind, "error");
 });
 
 test("parseRepoSlug accepts canonical GitHub slugs and HTTPS URLs", () => {
