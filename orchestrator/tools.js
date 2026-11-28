@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { runTestsInSandbox } from "./docker-sandbox.js";
@@ -99,8 +100,13 @@ export function makeTools(repoRoot) {
       }
 
       assertSafeParent(repoRoot, full, relPath);
+      const contentHash = createHash("sha256").update(content, "utf-8").digest("hex");
+      const previousHash = fs.existsSync(full)
+        ? createHash("sha256").update(fs.readFileSync(full)).digest("hex")
+        : null;
+      const changed = previousHash !== contentHash;
       fs.writeFileSync(full, content, "utf-8");
-      return { ok: true, path: relPath };
+      return { ok: true, path: relPath, changed, previousHash, contentHash };
     },
 
     // Recursive on purpose: the first version only listed one directory
