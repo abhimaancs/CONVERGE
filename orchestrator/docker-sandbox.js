@@ -73,6 +73,10 @@ export function detectProjectCheck(projectDirectory) {
   };
 }
 
+export function isPackageLockOutOfSync(output = "") {
+  return /package\.json and package-lock\.json.*(?:not in sync|out of sync)|npm ci can only install packages when|Missing: .+ from lock file/i.test(output);
+}
+
 function appendOutput(current, chunk) {
   const combined = current + chunk;
   if (combined.length <= MAX_OUTPUT_CHARS) return combined;
@@ -175,7 +179,32 @@ async function runNpmCheck(repoPath, relativeTestPath, projectCheck) {
       IMAGE_NAME,
       "npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--cache", "/tmp/npm-cache"
     );
-    const install = await runDocker(installArgs, NODE_INSTALL_TIMEOUT_MS);
+    let install = await runDocker(installArgs, NODE_INSTALL_TIMEOUT_MS);
+    if (!install.error && !install.timedOut && install.code !== 0 && isPackageLockOutOfSync(install.output)) {
+      // The agent may add a test script or test-only dependency while fixing a
+      // project that had no test suite. Refresh the lockfile without running
+      // package lifecycle scripts, then retry the reproducible npm ci install.
+      const lockArgs = ["run", "--rm", "--network", "bridge"];
+      appendContainerLimits(lockArgs, { node: true });
+      lockArgs.push(
+        "--user", "0:0",
+        "-v", `${repoPath}:/workspace:rw`,
+        "-w", workspacePath,
+        IMAGE_NAME,
+        "npm", "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund", "--cache", "/tmp/npm-cache"
+      );
+      const lockUpdate = await runDocker(lockArgs, NODE_INSTALL_TIMEOUT_MS);
+      if (lockUpdate.error || lockUpdate.timedOut || lockUpdate.code !== 0) {
+        const failure = resultFromRun(lockUpdate, "npm lockfile update");
+        return {
+          passed: false,
+          verification: projectCheck.verification,
+          runner: projectCheck.kind,
+          output: `Could not update package-lock.json after package.json changed (lifecycle scripts were disabled):\n${failure.output || "npm install --package-lock-only exited unsuccessfully."}`,
+        };
+      }
+      install = await runDocker(installArgs, NODE_INSTALL_TIMEOUT_MS);
+    }
     if (install.error || install.timedOut || install.code !== 0) {
       const failure = resultFromRun(install, "npm dependency installation");
       return {
